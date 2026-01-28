@@ -1,138 +1,224 @@
-import { View, Text, TouchableOpacity, ScrollView, Image, Alert } from "react-native";
-import { useEffect, useState } from "react";
+import { View, Text, TouchableOpacity, ScrollView, Image, Alert, Animated, StatusBar, Modal, TextInput, ActivityIndicator } from "react-native";
+import { useEffect, useState, useRef } from "react";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import api from "../../utils/api";
 import { useTheme } from "../../context/ThemeContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from 'expo-image-picker';
 
 export default function Profile() {
   const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ recipes: 12, followers: 45, saved: 108 });
-  const { theme, toggleTheme, isDark } = useTheme();
+  const [modals, setModals] = useState({ edit: false, password: false });
+  const [formData, setFormData] = useState({ name: "", password: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const [notification, setNotification] = useState({ visible: false, message: "" });
 
-  const bgColor = isDark ? "bg-neutral-900" : "bg-gray-50";
-  const headerBgColor = isDark ? "bg-neutral-800" : "bg-white";
-  const cardBgColor = isDark ? "bg-neutral-800" : "bg-white";
-  const textColor = isDark ? "text-white" : "text-gray-900";
-  const secondaryTextColor = isDark ? "text-neutral-400" : "text-gray-600";
-  const borderColor = isDark ? "border-neutral-700" : "border-gray-200";
+  const { isDark, toggleTheme } = useTheme();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const successAnim = useRef(new Animated.Value(0)).current;
+  const theme = {
+    bg: isDark ? "bg-neutral-900" : "bg-white",
+    card: isDark ? "bg-neutral-800/50" : "bg-gray-50",
+    text: isDark ? "text-white" : "text-gray-900",
+    subText: isDark ? "text-neutral-400" : "text-gray-600",
+    border: isDark ? "border-neutral-700" : "border-gray-200",
+  };
 
   useEffect(() => {
-    setUser({ username: "Muskan_Singh", email: "muskan@example.com", name: "Muskan Singh", avatar: null });
-
-    api.get("/users/profile").then(res => {
-        if(res.data?.data) {
-             setUser(res.data.data);
-             if(res.data.data.recipesCount || res.data.data.followersCount || res.data.data.savedCount) {
-               setStats({
-                 recipes: res.data.data.recipesCount || 10,
-                 followers: res.data.data.followersCount || 35,
-                 saved: res.data.data.savedCount || 100
-               });
-             }
-        }
-    }).catch(err => console.log("API Error (using mock)", err));
+    loadUserProfile();
   }, []);
 
-  if (!user) {
-      return (
-          <View className="flex-1 bg-neutral-900 justify-center items-center">
-              <Text className="text-white">Loading...</Text>
-          </View>
-      );
-  }
-  const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Logout", style: "destructive", onPress: () => router.replace("/login") },
-    ]);
+  const loadUserProfile = async () => {
+    try {
+      const local = await AsyncStorage.getItem("user");
+      if (local) {
+        const parsed = JSON.parse(local);
+        setUser(parsed);
+        setFormData(prev => ({ ...prev, name: parsed.firstName || "User" }));
+      } else {
+        // Set default if no user in storage
+        setUser({ firstName: "User", lastName: "", email: "user@example.com" });
+      }
+    } catch (err) { 
+      console.log("Load error:", err);
+      setUser({ firstName: "User", lastName: "", email: "user@example.com" });
+    }
+    
+    // Always stop loading immediately
+    setLoading(false);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
+    
+    // Fetch fresh data in background
+    try {
+      const res = await api.get("/users/profile");
+      if (res.data?.data) {
+        setUser(res.data.data);
+        setFormData(prev => ({ ...prev, name: res.data.data.firstName }));
+      }
+    } catch (err) {
+      console.log("API error:", err);
+    }
   };
+
+  const triggerToast = (msg: string) => {
+    setNotification({ visible: true, message: msg });
+    Animated.sequence([
+      Animated.spring(successAnim, { toValue: 1, useNativeDriver: true }),
+      Animated.delay(2000),
+      Animated.spring(successAnim, { toValue: 0, useNativeDriver: true })
+    ]).start(() => setNotification({ ...notification, visible: false }));
+  };
+
+  const handleUpdate = async (type: 'profile' | 'password') => {
+    const isPass = type === 'password';
+    if (isPass && formData.password.length < 6) return Alert.alert("Error", "Min 6 chars");
+
+    try {
+      const payload = isPass ? { password: formData.password } : { firstName: formData.name };
+      await api.put("/users/profile", payload);
+      
+      if (!isPass) {
+        const updated = { ...user, firstName: formData.name };
+        setUser(updated);
+        await AsyncStorage.setItem("user", JSON.stringify(updated));
+      }
+      
+      setModals({ edit: false, password: false });
+      setFormData(prev => ({ ...prev, password: "" }));
+      triggerToast(isPass ? "✅ Password Updated!" : "✅ Profile Updated!");
+    } catch (err) { Alert.alert("Error", "Update failed"); }
+  };
+
+  if (!user) return (
+    <View className={`flex-1 items-center justify-center ${theme.bg}`}>
+      <ActivityIndicator size="large" color="#4f46e5" />
+    </View>
+  );
+
   return (
-    <View className={`flex-1 ${bgColor}`}>
-        <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-            <View className={`items-center pt-12 pb-8 ${headerBgColor} rounded-b-[40px] shadow-lg shadow-black/20`}>
-                <View className="relative">
-                    <View className={`w-28 h-28 ${isDark ? "bg-neutral-700" : "bg-gray-200"} rounded-full items-center justify-center border-4 ${isDark ? "border-neutral-900" : "border-gray-50"}`}>
-                         {user.avatar ? (
-                            <Image source={{ uri: user.avatar }} className="w-full h-full rounded-full" />
-                         ) : (
-                             <Ionicons name="person" size={50} color={isDark ? "#525252" : "#999"} />
-                         )}
-                    </View>
-                    <View className="absolute bottom-2 right-2 w-5 h-5 bg-indigo-500 rounded-full border-3 border-neutral-800" />
-                    <TouchableOpacity className="absolute bottom-0 right-0 bg-indigo-500 p-2 rounded-full border-2 border-neutral-900" onPress={() => router.push("/profile/edit")}>
-                        <Ionicons name="pencil" size={16} color="white" />
-                    </TouchableOpacity>
-                </View>
-                
-                <Text className={`${textColor} text-2xl font-bold mt-4`}>{user.username}</Text>
-                <Text className={secondaryTextColor}>{user.email}</Text>
+    <View className={`flex-1 ${theme.bg}`}>
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
+      {notification.visible && (
+        <Animated.View style={{ opacity: successAnim, transform: [{ translateY: successAnim.interpolate({inputRange:[0,1], outputRange:[-20, 0]}) }] }}
+          className="absolute top-12 self-center z-50 bg-green-500 rounded-2xl px-6 py-3 shadow-xl flex-row items-center">
+          <Ionicons name="checkmark-circle" size={20} color="white" />
+          <Text className="text-white font-bold ml-2">{notification.message}</Text>
+        </Animated.View>
+      )}
 
-                <View className="flex-row mt-6 space-x-12">
-                    <View className="items-center">
-                        <Text className={`${textColor} font-bold text-lg`}>{stats.recipes}</Text>
-                        <Text className={`${isDark ? "text-neutral-500" : "text-gray-500"} text-xs uppercase tracking-wider`}>Recipes</Text>
-                    </View>
-                    <View className="items-center">
-                        <Text className={`${textColor} font-bold text-lg`}>{stats.followers}</Text>
-                        <Text className={`${isDark ? "text-neutral-500" : "text-gray-500"} text-xs uppercase tracking-wider`}>Followers</Text>
-                    </View>
-                    <View className="items-center">
-                        <Text className={`${textColor} font-bold text-lg`}>{stats.saved}</Text>
-                        <Text className={`${isDark ? "text-neutral-500" : "text-gray-500"} text-xs uppercase tracking-wider`}>Saved</Text>
-                    </View>
-                </View>
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+      
+        <Animated.View style={{ opacity: fadeAnim }} className="items-center pt-10 pb-6 border-b border-gray-100 dark:border-neutral-800">
+          <TouchableOpacity onPress={async () => {
+            const res = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [1, 1] });
+            if (!res.canceled) setUser({ ...user, avatar: res.assets[0].uri });
+          }} className="mb-4">
+            {user.avatar ? (
+              <Image source={{ uri: user.avatar }} className="w-28 h-28 rounded-full border-4 border-indigo-500" />
+            ) : (
+              <View className="w-28 h-28 rounded-full border-4 border-indigo-500 bg-indigo-100 dark:bg-indigo-900 items-center justify-center">
+                <Ionicons name="person" size={48} color="#6366f1" />
+              </View>
+            )}
+            <View className="absolute bottom-0 right-0 bg-indigo-500 p-2 rounded-full border-2 border-white">
+              <Ionicons name="camera" size={16} color="white" />
             </View>
-
-            {/* Settings Section */}
-            <View className="px-6 mt-8 space-y-4">
-                <Text className={`${secondaryTextColor} text-sm font-medium ml-2 mb-2 uppercase tracking-widest`}>Settings</Text>
-                
-                {/* Theme Toggle */}
-                <TouchableOpacity className={`flex-row items-center ${cardBgColor} p-4 rounded-xl border ${borderColor}`} onPress={toggleTheme}>
-                    <View className="w-10 h-10 bg-indigo-500/10 items-center justify-center rounded-lg mr-4">
-                         <Ionicons name={isDark ? "moon" : "sunny"} size={20} color="#6366f1" />
-                    </View>
-                    <Text className={`flex-1 ${textColor} font-medium text-base`}>{isDark ? "Dark Mode" : "Light Mode"}</Text>
-                    <Ionicons name={isDark ? "moon" : "sunny"} size={20} color="#6366f1" />
-                </TouchableOpacity>
-
-                <TouchableOpacity className={`flex-row items-center ${cardBgColor} p-4 rounded-xl border ${borderColor}`} onPress={() => router.push("/profile/edit")}>
-                    <View className="w-10 h-10 bg-indigo-500/10 items-center justify-center rounded-lg mr-4">
-                         <Ionicons name="person-outline" size={20} color="#6366f1" />
-                    </View>
-                    <Text className={`flex-1 ${textColor} font-medium text-base`}>Edit Profile</Text>
-                    <Ionicons name="chevron-forward" size={20} color={isDark ? "#525252" : "#ccc"} />
-                </TouchableOpacity>
-
-                <TouchableOpacity className={`flex-row items-center ${cardBgColor} p-4 rounded-xl border ${borderColor}`}>
-                    <View className="w-10 h-10 bg-indigo-500/10 items-center justify-center rounded-lg mr-4">
-                         <Ionicons name="notifications-outline" size={20} color="#6366f1" />
-                    </View>
-                    <Text className={`flex-1 ${textColor} font-medium text-base`}>Notifications</Text>
-                    <Ionicons name="chevron-forward" size={20} color={isDark ? "#525252" : "#ccc"} />
-                </TouchableOpacity>
-
-                <TouchableOpacity className={`flex-row items-center ${cardBgColor} p-4 rounded-xl border ${borderColor}`}>
-                    <View className="w-10 h-10 bg-indigo-500/10 items-center justify-center rounded-lg mr-4">
-                         <Ionicons name="shield-checkmark-outline" size={20} color="#6366f1" />
-                    </View>
-                    <Text className={`flex-1 ${textColor} font-medium text-base`}>Privacy & Security</Text>
-                    <Ionicons name="chevron-forward" size={20} color={isDark ? "#525252" : "#ccc"} />
-                </TouchableOpacity>
-
-                 <TouchableOpacity 
-                    className={`flex-row items-center bg-red-500/10 p-4 rounded-xl mt-4 border ${borderColor}`}
-                    onPress={handleLogout}
-                >
-                    <View className="w-10 h-10 bg-red-500/10 items-center justify-center rounded-lg mr-4">
-                         <Ionicons name="log-out-outline" size={20} color="#ef4444" />
-                    </View>
-                    <Text className="flex-1 text-red-500 font-medium text-base">Logout</Text>
-                </TouchableOpacity>
+          </TouchableOpacity>
+          <Text className={`${theme.text} text-2xl font-bold`}>{user.firstName} {user.lastName}</Text>
+          <Text className={theme.subText}>{user.email}</Text>
+        </Animated.View>
+        <View className="flex-row justify-around py-6">
+          {Object.entries(stats).map(([label, value]) => (
+            <View key={label} className="items-center">
+              <Text className={`${theme.text} text-xl font-bold`}>{value}</Text>
+              <Text className={`${theme.subText} text-xs uppercase`}>{label}</Text>
             </View>
-        </ScrollView>
+          ))}
+        </View>
+        <View className="px-6 gap-3">
+          <SettingItem icon="person" label="Edit Profile" sub="Update details" theme={theme} onPress={() => setModals({ ...modals, edit: true })} />
+          <SettingItem icon="key" label="Password" sub="Change security" theme={theme} onPress={() => setModals({ ...modals, password: true })} />
+          <SettingItem icon={isDark ? "moon" : "sunny"} label="Appearance" sub={isDark ? "Dark Mode" : "Light Mode"} theme={theme} onPress={toggleTheme} isToggle />
+          
+          <TouchableOpacity onPress={() => Alert.alert("Logout", "Sure?", [{text: "No"}, {text: "Yes", onPress: () => router.replace("/login")}])}
+            className="mt-6 bg-red-50 p-4 rounded-2xl items-center flex-row justify-center border border-red-100">
+            <Ionicons name="log-out" size={20} color="#ef4444" />
+            <Text className="text-red-500 font-bold ml-2">Logout</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+      <EntryModal 
+        visible={modals.edit || modals.password} 
+        onClose={() => setModals({ edit: false, password: false })}
+        title={modals.edit ? "Edit Profile" : "Change Password"}
+        theme={theme}
+      >
+        {modals.edit ? (
+          <>
+            <TextInput 
+              className={`${theme.text} ${theme.card} p-4 rounded-xl mb-4 border border-gray-300`}
+              placeholder="First Name"
+              placeholderTextColor="#999"
+              value={formData.name}
+              onChangeText={(v) => setFormData({...formData, name: v})}
+            />
+            <TouchableOpacity onPress={() => handleUpdate('profile')} className="bg-indigo-500 p-4 rounded-xl">
+              <Text className="text-white text-center font-bold">Save Changes</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <View className="relative mb-4">
+              <TextInput 
+                className={`${theme.text} ${theme.card} p-4 rounded-xl border border-gray-300 pr-12`}
+                placeholder="New Password"
+                placeholderTextColor="#999"
+                secureTextEntry={!showPassword}
+                value={formData.password}
+                onChangeText={(v) => setFormData({...formData, password: v})}
+              />
+              <TouchableOpacity 
+                onPress={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-4"
+              >
+                <Ionicons name={showPassword ? "eye" : "eye-off"} size={20} color="#6366f1" />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity onPress={() => handleUpdate('password')} className="bg-indigo-500 p-4 rounded-xl">
+              <Text className="text-white text-center font-bold">Change Password</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </EntryModal>
     </View>
   );
 }
+const SettingItem = ({ icon, label, sub, theme, onPress }: any) => (
+  <TouchableOpacity onPress={onPress} className={`${theme.card} p-4 rounded-2xl flex-row items-center border ${theme.border}`}>
+    <View className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 rounded-lg items-center justify-center mr-4">
+      <Ionicons name={icon} size={20} color="#6366f1" />
+    </View>
+    <View className="flex-1">
+      <Text className={`${theme.text} font-semibold`}>{label}</Text>
+      <Text className={`${theme.subText} text-xs`}>{sub}</Text>
+    </View>
+    <Ionicons name="chevron-forward" size={18} color="#999" />
+  </TouchableOpacity>
+);
 
+const EntryModal = ({ visible, onClose, title, children, theme }: any) => (
+  <Modal visible={visible} animationType="slide" transparent>
+    <View className={`flex-1 justify-end bg-black/50`}>
+      <View className={`${theme.bg} p-6 rounded-t-3xl`}>
+        <View className="flex-row justify-between mb-6">
+          <Text className={`${theme.text} text-xl font-bold`}>{title}</Text>
+          <TouchableOpacity onPress={onClose}><Ionicons name="close" size={24} color={theme.text.includes("white") ? "white" : "black"} /></TouchableOpacity>
+        </View>
+        {children}
+      </View>
+    </View>
+  </Modal>
+);
